@@ -1,6 +1,5 @@
-version: "3.9"
-
 services:
+  # --- PostgreSQL Database ---
   postgres:
     image: postgres:16-alpine
     container_name: polybot-db
@@ -17,7 +16,80 @@ services:
       test: ["CMD-SHELL", "pg_isready -U polybot"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+
+  # --- Database Migration (runs once then exits) ---
+  migrate:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+      target: builder
+    container_name: polybot-migrate
+    environment:
+      DATABASE_URL: "postgresql://polybot:polybot_dev_password@postgres:5432/polybot"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: npx prisma db push --accept-data-loss
+    restart: "no"
+
+  # --- Seed default settings (runs once then exits) ---
+  seed:
+    build:
+      context: .
+      dockerfile: engine/Dockerfile
+    container_name: polybot-seed
+    working_dir: /app
+    environment:
+      DATABASE_URL: "postgresql://polybot:polybot_dev_password@postgres:5432/polybot"
+      DB_HOST: postgres
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: python scripts/seed_settings.py
+    restart: "no"
+
+  # --- Python Trading Engine ---
+  engine:
+    build:
+      context: .
+      dockerfile: engine/Dockerfile
+    container_name: polybot-engine
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      DATABASE_URL: "postgresql://polybot:polybot_dev_password@postgres:5432/polybot"
+      DB_HOST: postgres
+      ENGINE_MODE: paper
+      PAPER_STARTING_CAPITAL_CENTS: "10000"
+      KALSHI_ENV: demo
+      KALSHI_API_KEY_ID: ""
+      KALSHI_PRIVATE_KEY_PATH: ""
+      TELEGRAM_TOKEN: ""
+      TELEGRAM_CHAT_ID: ""
+      LOG_LEVEL: INFO
+    env_file:
+      - .env
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    volumes:
+      - ./engine:/app/engine:ro
+      - ./scripts:/app/scripts:ro
+
+  # --- Next.js Dashboard ---
+  dashboard:
+    build:
+      context: ./dashboard
+    container_name: polybot-dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: "postgresql://polybot:polybot_dev_password@postgres:5432/polybot"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:
