@@ -1,7 +1,7 @@
 """
 Kalshi Market Making Engine — main entry point.
 
-Full orchestrator: WebSocket, market scanner, simple quoter, risk engine,
+Full orchestrator: WebSocket, market scanner, AS quote generator, risk engine,
 circuit breakers, position tracker, order reconciler, Telegram bot,
 settings poller, portfolio snapshots. Graceful shutdown on SIGINT/SIGTERM.
 """
@@ -45,6 +45,9 @@ from engine.risk.circuit_breakers import CircuitBreakerManager
 from engine.risk.position_tracker import PositionTracker
 from engine.risk.risk_engine import RiskEngine
 from engine.storage.db_writer import DbWriter
+from engine.strategy.inventory_manager import InventoryManager
+from engine.strategy.quote_generator import QuoteGenerator
+from engine.strategy.signal_integrator import SignalIntegrator
 from engine.strategy.simple_quoter import SimpleQuoter
 
 logger = structlog.get_logger(__name__)
@@ -106,12 +109,21 @@ class Engine:
             mode=self._config.mode,
         )
 
-        # Strategy
-        self._quoter = SimpleQuoter(
+        # Strategy — AS model (replaces simple quoter from Phase 2)
+        self._inventory_mgr = InventoryManager(
+            config=self._config, bus=self._bus,
+        )
+        self._signal_integrator = SignalIntegrator(
+            config=self._config, bus=self._bus,
+        )
+        self._quoter = QuoteGenerator(
             config=self._config,
             bus=self._bus,
             executor=self._executor,
             risk_engine=self._risk,
+            inventory_mgr=self._inventory_mgr,
+            signal_integrator=self._signal_integrator,
+            circuit_breakers=self._circuit_breakers,
         )
 
         # Order reconciliation
