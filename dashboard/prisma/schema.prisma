@@ -1,0 +1,248 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Bot configuration — singleton row, dashboard writes, engine reads
+// ---------------------------------------------------------------------------
+
+model BotSettings {
+  id                        String   @id @default("singleton")
+  mode                      String   @default("paper") // "paper" | "live"
+
+  // Risk parameters
+  maxPositionPerMarket      Int      @default(10)
+  globalExposureLimitCents  Int      @default(10000)
+  dailyLossLimitCents       Int      @default(1000)
+  drawdownLimit             Float    @default(0.10)
+
+  // Strategy parameters
+  baseGamma                 Float    @default(0.3)
+  sigma                     Float    @default(0.15)
+  minSpreadCents            Int      @default(3)
+  orderSize                 Int      @default(5)
+  signalWeight              Float    @default(0.0)
+
+  // Market selection
+  minVolume                 Int      @default(100)
+  maxMarketSpreadCents      Int      @default(10)
+  minTimeToExpiry           Int      @default(3600) // seconds
+
+  // Paper trading milestone (advisory)
+  paperMilestoneDays        Int      @default(30)
+
+  // Notifications
+  telegramToken             String?
+  telegramChatId            String?
+
+  // API keys (display only — actual key used from engine env)
+  kalshiApiKeyId            String?
+
+  // Polling
+  settingsPollIntervalSec   Int      @default(5)
+  reconciliationIntervalSec Int      @default(30)
+  snapshotIntervalSec       Int      @default(300)
+
+  updatedAt                 DateTime @updatedAt
+
+  @@map("bot_settings")
+}
+
+// ---------------------------------------------------------------------------
+// Engine status — singleton heartbeat row, engine writes, dashboard reads
+// ---------------------------------------------------------------------------
+
+model EngineStatus {
+  id                    String   @id @default("singleton")
+  mode                  String   @default("paper")
+  isRunning             Boolean  @default(false)
+  isPaused              Boolean  @default(false)
+  connected             Boolean  @default(false)
+  activeMarkets         String   @default("[]") // JSON array of tickers
+  circuitBreakerState   String   @default("ok") // "ok" | "warning" | "halted"
+  circuitBreakerReason  String?
+  lastHeartbeatAt       DateTime @default(now())
+  lastTradeAt           DateTime?
+
+  @@map("engine_status")
+}
+
+// ---------------------------------------------------------------------------
+// Orders — every order submitted across all modes
+// ---------------------------------------------------------------------------
+
+model Order {
+  id               String   @id @default(uuid())
+  externalOrderId  String   @unique
+  ticker           String
+  side             String   // "yes" | "no"
+  action           String   // "buy" | "sell"
+  priceCents       Int
+  size             Int
+  status           String   // "pending" | "resting" | "filled" | "cancelled"
+  mode             String   // "paper" | "live" | "backtest"
+  clientOrderId    String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  fills            Fill[]
+
+  @@index([ticker])
+  @@index([status])
+  @@index([mode])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+// ---------------------------------------------------------------------------
+// Fills — every trade fill
+// ---------------------------------------------------------------------------
+
+model Fill {
+  id           String   @id @default(uuid())
+  orderId      String
+  ticker       String
+  side         String
+  action       String
+  count        Int
+  priceCents   Int
+  feeCents     Int      @default(0)
+  isMaker      Boolean  @default(true)
+  pnlCents     Int      @default(0)
+  mode         String
+  createdAt    DateTime @default(now())
+
+  order        Order    @relation(fields: [orderId], references: [externalOrderId])
+
+  @@index([ticker])
+  @@index([createdAt])
+  @@map("fills")
+}
+
+// ---------------------------------------------------------------------------
+// Positions — current open positions
+// ---------------------------------------------------------------------------
+
+model Position {
+  id                  String   @id @default(uuid())
+  ticker              String   @unique
+  title               String   @default("")
+  side                String
+  size                Int
+  entryPriceCents     Int
+  currentPriceCents   Int
+  unrealizedPnlCents  Int      @default(0)
+  isOpen              Boolean  @default(true)
+  openedAt            DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([isOpen])
+  @@map("positions")
+}
+
+// ---------------------------------------------------------------------------
+// Portfolio snapshots — equity time-series
+// ---------------------------------------------------------------------------
+
+model PortfolioSnapshot {
+  id               String   @id @default(uuid())
+  balanceCents     Int
+  equityCents      Int
+  openPnlCents     Int
+  realizedPnlCents Int
+  totalPnlCents    Int
+  numPositions     Int
+  numOpenOrders    Int
+  mode             String
+  snapshotAt       DateTime @default(now())
+
+  @@index([snapshotAt])
+  @@index([mode])
+  @@map("portfolio_snapshots")
+}
+
+// ---------------------------------------------------------------------------
+// Market metrics — per-market daily performance
+// ---------------------------------------------------------------------------
+
+model MarketMetric {
+  id              String   @id @default(uuid())
+  ticker          String
+  date            DateTime @db.Date
+  volumeTraded    Int      @default(0)
+  realizedPnlCents Int     @default(0)
+  fillRate        Float    @default(0)
+  avgSpreadCents  Float    @default(0)
+  numOrders       Int      @default(0)
+
+  @@unique([ticker, date])
+  @@map("market_metrics")
+}
+
+// ---------------------------------------------------------------------------
+// Market configs — per-market overrides (enabled/disabled)
+// ---------------------------------------------------------------------------
+
+model MarketConfig {
+  id           String   @id @default(uuid())
+  ticker       String   @unique
+  title        String   @default("")
+  enabled      Boolean  @default(true)
+  excluded     Boolean  @default(false)
+  updatedAt    DateTime @updatedAt
+
+  @@map("market_configs")
+}
+
+// ---------------------------------------------------------------------------
+// Deposits — manual capital event tracking
+// ---------------------------------------------------------------------------
+
+model Deposit {
+  id          String   @id @default(uuid())
+  amountCents Int      // positive = deposit, negative = withdrawal
+  description String?
+  occurredAt  DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([occurredAt])
+  @@map("deposits")
+}
+
+// ---------------------------------------------------------------------------
+// Paper milestone — tracks paper trading progression
+// ---------------------------------------------------------------------------
+
+model PaperMilestone {
+  id              String    @id @default("singleton")
+  startedAt       DateTime  @default(now())
+  targetDays      Int       @default(30)
+  profitableDays  Int       @default(0)
+  lastCheckedDate String?   // "YYYY-MM-DD"
+  achieved        Boolean   @default(false)
+  achievedAt      DateTime?
+
+  @@map("paper_milestone")
+}
+
+// ---------------------------------------------------------------------------
+// Notifications — events for dashboard toasts
+// ---------------------------------------------------------------------------
+
+model Notification {
+  id        String   @id @default(uuid())
+  type      String   // "trade_filled" | "circuit_breaker" | "milestone" | "error"
+  title     String
+  message   String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([read])
+  @@index([createdAt])
+  @@map("notifications")
+}
