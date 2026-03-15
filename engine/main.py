@@ -48,6 +48,7 @@ from engine.storage.db_writer import DbWriter
 from engine.strategy.inventory_manager import InventoryManager
 from engine.strategy.quote_generator import QuoteGenerator
 from engine.strategy.signal_integrator import SignalIntegrator
+from engine.execution.live_executor import LiveExecutor
 from engine.strategy.simple_quoter import SimpleQuoter
 
 logger = structlog.get_logger(__name__)
@@ -89,13 +90,13 @@ class Engine:
         )
 
         # Execution
-        if self._config.mode == Mode.PAPER:
-            self._executor = PaperExecutor(
+        if self._config.mode == Mode.LIVE:
+            self._executor = LiveExecutor(
+                rest_client=self._rest_client,
                 bus=self._bus,
-                starting_balance_cents=self._config.paper_starting_capital_cents,
+                db_writer=self._db,
             )
         else:
-            # Live executor added in Phase 5
             self._executor = PaperExecutor(
                 bus=self._bus,
                 starting_balance_cents=self._config.paper_starting_capital_cents,
